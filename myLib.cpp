@@ -5,6 +5,7 @@
 #include "source/tests.h"
 #include "source/operators.h"
 #include "source/types.h"
+#include "source/ParserAPI.hpp"
 //#include "source/num.h"
 #include "source/numberic.h"
 #include "source/language.h"

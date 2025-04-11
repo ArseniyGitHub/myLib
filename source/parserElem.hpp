@@ -86,14 +86,15 @@ namespace PARSER_V2 {
 		virtual size_t parse(bytesVec*, base_iterator*, size_t) = 0;
 	};
 	*/
+
 	__interface packable {
-		virtual size_t pack(bytesVec*, size_t)  = 0;
-		virtual size_t parse(bytesVec*, size_t) = 0;
+		virtual size_t pack(bytesVec*, size_t, void*)  = 0;
+		virtual size_t parse(bytesVec*, size_t, void*) = 0;
 	};
 	/*
 	struct __ParserErr_NotFullPacket {};
 	*/
-	using _szType = size_t;
+	using _szType = ui32;
 
 	
 	/*
@@ -321,9 +322,9 @@ namespace PARSER_V2 {
 					p = _packableObject<arrElT>::typeOF::getOF().packObj;
 					givePtr = _args;
 				}
-				_packableObject<size_t> eSize;
+				_packableObject<_szType> eSize;
 				if constexpr (is_size_dynamic<type>) {
-					_packableObject<size_t> sz(obj->size());
+					_packableObject<_szType> sz(obj->size());
 					id += sz.pack(whr, id);
 				}
 				for (arrElT& e : *obj) {
@@ -363,9 +364,9 @@ namespace PARSER_V2 {
 					p = _packableObject<typename type::value_type>::typeOF::getOF().parseObj;
 					givePtr = _args;
 				}
-				_packableObject<size_t> eSize;
+				_packableObject<_szType> eSize;
 				if constexpr (is_size_dynamic<type>) {
-					_packableObject<size_t> sz;
+					_packableObject<_szType> sz;
 					id += sz.parse(whr, id);
 					obj->resize(sz.getObject());
 				}
@@ -379,7 +380,14 @@ namespace PARSER_V2 {
 			else return 0;
 		}
 
-		
+		struct _fnArgs {
+			size_t useWhen = 0;
+			typeOF OF;
+			void* data = nullptr;
+			constexpr _fnArgs(_szType i = -1, typeOF _OF = typeOF(), void* _data = nullptr) : useWhen(i), data(_data) {
+				OF = _OF;
+			}
+		};
 
 
 		inline static typeOF constexpr _defByteCopyOF{ &_defByteCopyPack, &_defByteCopyParse };
@@ -400,33 +408,23 @@ namespace PARSER_V2 {
 			}
 			
 		};
-		struct _fnArgs {
-			size_t useWhen = 0;
-			typeOF OF;
-			void* data = nullptr;
-			constexpr _fnArgs(size_t i = -1, typeOF _OF = typeOF(), void* _data = nullptr) : useWhen(i), data(_data) {
-				OF = _OF;
-			}
-		};
-
+		
 		typeOF OF;
-		_fnArgs args;
 		bool connect = false;
 
-
-		_packableObject(type* connect, typeOF _OF = typeOF::getOF(), _fnArgs _args = _fnArgs()) : object(connect), OF(_OF), args(_args), connect(true) {}
-		_packableObject(const type& from, typeOF _OF = typeOF::getOF(), _fnArgs _args = _fnArgs()) : object(new type(from)), OF(_OF), args(_args) {}
-		_packableObject(typeOF _OF = typeOF::getOF(), _fnArgs _args = _fnArgs()) : object(new type), OF(_OF), args(_args) {}
+		constexpr _packableObject(type* connect, typeOF _OF = typeOF::getOF()) : object(connect), OF(_OF), connect(true) {}
+		constexpr _packableObject(const type& from, typeOF _OF = typeOF::getOF()) : object(new type(from)), OF(_OF) {}
+		constexpr _packableObject(typeOF _OF = typeOF::getOF()) : object(new type), OF(_OF) {}
 		~_packableObject() {
 			if (!connect)
 				delete object;
 		}
 
-		size_t pack(bytesVec* to, size_t whr) {
-			return  OF.packObj(to, whr, object,   (void*)&args);
+		constexpr size_t pack(bytesVec* to, size_t whr, void* d = new _fnArgs()) {
+			return  OF.packObj(to, whr, object,   d);
 		}
-		size_t parse(bytesVec* from, size_t whr) {
-			return OF.parseObj(from, whr, object, (void*)&args);
+		constexpr size_t parse(bytesVec* from, size_t whr, void* d = new _fnArgs()) {
+			return OF.parseObj(from, whr, object, d);
 		}
 	};
 }
