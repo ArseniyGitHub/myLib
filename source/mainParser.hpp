@@ -2,289 +2,427 @@
 #include "parserElem.hpp"
 #include "types.h"
 #include <concepts>
+#include <variant>
+
 
 namespace PARSER_V2 {
-	
-	struct _defObjectInfo : public packable {
-		packableObject<_defObjectInfo>::objectFunctions myOF;
-		enum standardTypes {
+
+	template <typename T>
+	struct _hasDataPtr {
+		virtual T* cpyPtr() = 0;
+	};
+
+	struct _defObjectInfo : public packable, public _hasDataPtr<packable> {
+	public:
+		enum class dataTypes {
 			_null,
 			_int,
 			_uint,
 			_float,
-			_double,
-			_object, 
-			_stTypes_end
+			_package,
+			_packet,
+			_end
 		};
-		enum dataTypes {
+		enum class objTypes {
 			_elem,
 			_vec,
-			_dtTypes_end
+			_end
 		};
-		size_t objT = standardTypes::_null;
-		ui8 dataT = dataTypes::_elem;
+		friend struct _defParserObject;
+
+	public:
 		std::string name;
-		void* buffer = nullptr;
+		_szType dt = (_szType)dataTypes::_null;
+		ui8 ot  = (ui8)objTypes::_elem;
+		_szType elSz = 0;   ui8 is_named = 0;
+	public:
 
-		struct _NullType {
-			template <typename T> operator T& () { return *(new T); }
-			template <typename T> _NullType(const T&) {}
-			template <typename T> void operator = (const T&) {}
-			_NullType() {}
-		};
+		packable* data = nullptr;
+		
 
-		enum _bufferOperands {
-			_delete,
-			_create,
-			_get,
-			_set,
-			_import,
-			_export,
-			_pack,
-			_parse,
-			_operands_end
-		};
+		void setType(size_t t) { dt = ((_szType)dataTypes::_end + t); }
+		size_t getType() { return (size_t)dt - (size_t)dataTypes::_end; }
+		_szType& getSystemType() { return dt; }
+		bool getOT() { return ot; }
 
 		template <typename T>
-		requires (std::same_as<T, _defObjectInfo>)
-		packableObject<T>::objectFunctions _getOF() {
-			return ;
-		}
+		T* getAs() { return ((_packableObject<T>*)data)->getObjectPointer(); }
 
-		template <typename T>
-		requires (!std::same_as<T, _defObjectInfo>)
-		packableObject<T>::objectFunctions _getOF() {
-			return packableObject<T>::_defByteFunctions;
-		}
+		void setName(const std::string& _name) { name = _name; if (name.empty()) is_named = 0; else is_named = 1; }
+		const std::string& getName() { return name; }
+		std::string& getNameRef()    { return name; }
+		bool isNamed() { return is_named; }
+	};
 
-		template <typename T>
-		requires (is_any_array_c<T>)
-		void pack_or_parse(const _bufferOperands id, _packableArgs* args) {
-			using elType = element_type<T>;
-			packableVector<T> vec((T*)buffer);
-			vec.setOF(_getOF<elType>());
-			switch (id) {
-			case _pack:
-				vec.pack(args->to, args->whr, args->data);
-				break;
-			case _parse:
-				vec.parse(args->to, args->whr, args->data);
-				break;
+	struct _defParserObject : public _defObjectInfo {
+	public:
+
+		static constexpr size_t _defPack (bytesVec* v, size_t whr, _defParserObject* obj, void* args, size_t szLimit = 0) {
+			size_t beginID = whr;
+			_packableObject<ui8> _ot = (obj->ot) + ((obj->is_named) << 1);
+			whr += _ot.pack(v, whr);
+
+			_packableObject<_szType> _dt(&obj->dt);
+			whr += _dt.pack(v, whr);
+
+			_packableObject<_szType> _elSz(&obj->elSz);
+			whr += _elSz.pack(v, whr);
+
+			if (obj->is_named) {
+				_packableObject<std::string> name(&obj->name);
+				whr += name.pack(v, whr);
 			}
-		}
 
-		template <typename T>
-		requires (!is_any_array_c<T>)
-		void pack_or_parse(const _bufferOperands id, _packableArgs* args) {
-			using elType = T;
-			packableObject<elType> obj((T*)buffer);
-			obj.setOF(_getOF<elType>());
-			switch (id) {
-			case _pack:
-				obj.pack(args->to, args->whr, args->data);
-				break;
-			case _parse:
-				obj.parse(args->to, args->whr, args->data);
-				break;
-			}
-		}
+			_packableObject<int>::_fnArgs arg = nullptr;
 
-
-		template <typename type, typename T> T* bufferDo(const _bufferOperands id, void* data = nullptr) {
-			switch (id) {
-			case _delete:
-				delete (type*)buffer;
-				break;
-			case _create:
-				buffer = new type;
-				break;
-			case _set:
-				*(type*)buffer = (type)(*(T*)data);
-				break;
-			case _export:
-				*(T*)data = *(type*)buffer;
-				break;
-			case _get:
-				return new T(*(type*)buffer);
-			case _import:
-				buffer = new type(*(type*)data);
-				break;
-			case _pack:
-				pack_or_parse<type>(id, (_packableArgs*)data);
-				break;
-			case _parse:
-				pack_or_parse<type>(id, (_packableArgs*)data);
-				break;
-			}
-			return (T*)buffer;
-		}
-
-		template <typename T = _NullType> T* _buffer(const _bufferOperands id, void* data = nullptr) {
-			switch (dataT) {
-			case dataTypes::_elem:
-				switch (objT) {
-				case standardTypes::_float:
-					return bufferDo<float, T>(id, data);
-				case standardTypes::_int:
-					return bufferDo<i64, T>(id, data);
-				case standardTypes::_uint:
-					return bufferDo<ui64, T>(id, data);
-				case standardTypes::_string:
-					return bufferDo<std::string, T>(id, data);
-				case standardTypes::_double:
-					return bufferDo<long double, T>(id, data);
-				case standardTypes::_object:
-					return bufferDo<_defObjectInfo, T>(id, data);
-				case standardTypes::_null:
-					return bufferDo<_NullType, T>(id, data);
-				default:
-					return bufferDo<bytesVec, T>(id, data);
+			switch (obj->ot) {
+			case (ui8)objTypes::_elem:
+				switch (obj->dt) {
+				case (_szType)dataTypes::_package:
+					((packable*)obj->data)->myFunc(0, (void*)&myOF);
+					break;
 				}
-			case dataTypes::_vec:
-				switch (objT) {
-				case standardTypes::_float:
-					return bufferDo<std::vector<float>, T>(id, data);
-				case standardTypes::_int:
-					return bufferDo<std::vector<i64>, T>(id, data);
-				case standardTypes::_uint:
-					return bufferDo<std::vector<ui64>, T>(id, data);
-				case standardTypes::_string:
-					return bufferDo<std::vector<std::string>, T>(id, data);
-				case standardTypes::_double:
-					return bufferDo<std::vector<long double>, T>(id, data);
-				case standardTypes::_object:
-					return bufferDo<std::vector<_defObjectInfo>, T>(id, data);
-				case standardTypes::_null:
-					return bufferDo<std::vector<_NullType>, T>(id, data);
-				default:
-					return bufferDo<std::vector<bytesVec>, T>(id, data);
+				break;
+			case (ui8)objTypes::_vec:
+				switch (obj->dt) {
+				case (_szType)dataTypes::_package:
+					arg.OF.packObj  =  (fn<size_t, bytesVec*, size_t, int*, void*, size_t>)(void*)myOF.packObj;
+					arg.OF.parseObj = (fn<size_t, bytesVec*, size_t, int*, void*, size_t>)(void*)myOF.parseObj;
+					break;
+				}
+				break;
+			}
+			
+			whr += ((packable*)obj->data)->pack(v, whr, (void*)&arg, obj->elSz);
+			if (szLimit < (whr - beginID) && szLimit != 0) throw _PackableObject_ErrSizeArg();
+			return whr - beginID;
+		}
+		static constexpr size_t _defParse(bytesVec* v, size_t whr, _defParserObject* obj, void* args, size_t szLimit = 0) {
+			size_t beginID = whr;
+			_packableObject<ui8> _ot;
+			whr += _ot.parse(v, whr);
+			obj->ot = _ot.getObject() % 2;
+			obj->is_named = (_ot.getObject() >> 1) % 2;
+
+			_packableObject<_szType> _dt(&obj->dt);
+			whr += _dt.parse(v, whr);
+
+			_packableObject<_szType> _elSz(&obj->elSz);
+			whr += _elSz.parse(v, whr);
+
+			if (obj->is_named) {
+				_packableObject<std::string> name(&obj->name);
+				whr += name.parse(v, whr);
+			}
+
+			_packableObject<int>::_fnArgs arg;
+			if (args != nullptr) arg = *(_packableObject<int>::_fnArgs*)args;
+
+			switch (obj->ot) {
+			case (ui8)objTypes::_elem:
+				switch (obj->dt) {
+				case (_szType)dataTypes::_int:
+				case (_szType)dataTypes::_uint:
+					switch (obj->elSz) {
+					case 0: obj->data = new _packableObject<bytesVec>(); break;
+					case 1: obj->data = new _packableObject<i8>();  break;
+					case 2: obj->data = new _packableObject<i16>(); break;
+					case 4: obj->data = new _packableObject<i32>(); break;
+					case 8: obj->data = new _packableObject<i64>(); break;
+					default: obj->data = new _packableObject<_Packet>(); break;
+					}
+					break;
+				case (_szType)dataTypes::_float:
+					switch (obj->elSz) {
+					case 0: obj->data = new _packableObject<bytesVec>(); break;
+					case 4: obj->data = new  _packableObject<float>();   break;
+					case 8: obj->data = new _packableObject<double>();   break;
+					default: obj->data = new _packableObject<_Packet>(); ((_packableObject<_Packet>*)obj->data)->getObject().resize(obj->elSz); break;
+					}
+					break;
+				case (_szType)dataTypes::_package: obj->data = new _packableObject<_defParserObject>; ((_packableObject<_defParserObject>*)obj->data)->OF = myOF; break;
+				default: obj->data = new _packableObject<_Packet>(); break;
+				}
+				break;
+			case (_szType)objTypes::_vec:
+				switch (obj->dt) {
+				case (_szType)dataTypes::_int:
+				case (_szType)dataTypes::_uint:
+					switch (obj->elSz) {
+					case 0: obj->data = new _packableObject<std::vector<bytesVec>>(); break;
+					case 1: obj->data = new _packableObject<std::vector<i8>>();       break;
+					case 2: obj->data = new _packableObject<std::vector<i16>>();      break;
+					case 4: obj->data = new _packableObject<std::vector<i32>>();      break;
+					case 8: obj->data = new _packableObject<std::vector<i64>>();      break;
+					default: obj->data = new _packableObject<_Packet>(); break;
+					}
+					break;
+				case (_szType)dataTypes::_float:
+					switch (obj->elSz) {
+					case 0: obj->data = new _packableObject<std::vector<bytesVec>>(); break;
+					case sizeof(float): obj->data = new _packableObject<std::vector<float>>();    break;
+					case sizeof(double): obj->data = new _packableObject<std::vector<double>>();   break;
+					default: obj->data = new _packableObject<_Packet>(); break;
+					}
+					break;
+				case (_szType)dataTypes::_package: obj->data = new _packableObject<std::vector<_defParserObject>>; arg.OF.packObj = (fn<size_t, bytesVec*, size_t, int*, void*, size_t>)(void*)myOF.packObj; arg.OF.parseObj = (fn<size_t, bytesVec*, size_t, int*, void*, size_t>)(void*)myOF.parseObj; break;
+				case (_szType)dataTypes::_packet: obj->data = new _packableObject<_Packet>(); break;
+				default: obj->data = new _packableObject<_Packet>(); break;
+				}
+				break;
+			}
+
+			whr += ((packable*)obj->data)->parse(v, whr, (void*)&arg, obj->elSz);
+			if (szLimit < (whr - beginID) && szLimit != 0) throw _PackableObject_ErrSizeArg();
+			return whr - beginID;
+		}
+
+		inline static constexpr _packableObject<_defParserObject>::typeOF myOF{ &_defPack, &_defParse };
+
+		virtual size_t pack (bytesVec* to,   size_t id, void* data = new _packableObject<int>::_fnArgs(), size_t szLimit = 0) {
+			return this->myOF.packObj(to, id, this, data, szLimit);
+		}
+		virtual size_t parse(bytesVec* from, size_t id, void* data = new _packableObject<int>::_fnArgs(), size_t szLimit = 0) {
+			return this->myOF.parseObj(from, id, this, data, szLimit);
+		}
+		template <typename T>
+		requires (!PARSER_V2::is_any_array_c<T>)
+		constexpr void set(const T& from) {
+			this->ot = (ui8)objTypes::_elem;
+			if constexpr (std::is_same_v<T, _defParserObject>) {
+				this->ot = from.ot;
+				this->dt = from.dt;
+				this->elSz = from.elSz;
+				this->data = from.cpy();
+			}
+			else if constexpr (std::is_floating_point_v<T>) {
+				if constexpr (sizeof(T) == sizeof(float)) {
+					this->elSz = sizeof(float);
+					this->data = new _packableObject<float>(from);
+					this->dt = (_szType)dataTypes::_float;
+				}
+				else if constexpr (sizeof(T) == sizeof(double)) {
+					this->elSz = sizeof(double);
+					this->data = new _packableObject<double>(from);
+					this->dt = (_szType)dataTypes::_float;
+				}
+				else if constexpr (sizeof(T) == sizeof(long double)) {
+					this->elSz = sizeof(long double);
+					this->data = new _packableObject<long double>(from);
+					this->dt = (_szType)dataTypes::_float;
+				}
+			}
+			else if constexpr (std::is_integral_v<T>) {
+				if constexpr (std::is_signed_v<T>) {
+					this->elSz = sizeof(T);
+					this->dt = (_szType)dataTypes::_int;
+					this->data = new _packableObject<T>(from);
+				}
+				else {
+					this->elSz = sizeof(T);
+					this->dt = (_szType)dataTypes::_uint;
+					this->data = new _packableObject<T>(from);
+				}
+			}
+			else if constexpr (std::is_base_of_v<packable, T>) {
+				if constexpr (is_packed_size_static<T>) {
+					this->elSz = T::_packed_size;
+				}
+				else this->elSz = 0;
+				this->dt = dataTypes::_end;
+				this->data = new T(from);
+			}
+		}
+		template <typename T>
+		requires (PARSER_V2::is_any_array_c<T>)
+		constexpr void set(const T& from) {
+			using _elT = typename T::value_type;
+			this->ot = (ui8)objTypes::_vec;
+			if constexpr (std::is_same_v<_elT, _defParserObject>) {
+				this->data = new _packableObject<std::vector<_defParserObject>>(from.begin(), from.end());
+				//((_packableObject<std::vector<_defParserObject>>*)this->data)->getObject().assign(from.begin(), from.end());
+				this->dt = (_szType)dataTypes::_package;
+				this->elSz = 0;
+			}
+			else if constexpr (std::is_floating_point_v<_elT>) {
+				if constexpr (sizeof(_elT) == sizeof(float)) {
+					this->elSz = sizeof(float);
+					this->data = new _packableObject<std::vector<float>>(from.begin(), from.end());
+					this->dt = (_szType)dataTypes::_float;
+				}
+				else if constexpr (sizeof(_elT) == sizeof(double)) {
+					this->elSz = sizeof(double);
+					this->data = new _packableObject<std::vector<double>>(from.begin(), from.end());
+					this->dt = (_szType)dataTypes::_float;
+				}
+				else if constexpr (sizeof(_elT) == sizeof(long double)) {
+					this->elSz = sizeof(long double);
+					this->data = new _packableObject<std::vector<long double>>(from.begin(), from.end());
+					this->dt = (_szType)dataTypes::_float;
+				}
+			}
+			else if constexpr (std::is_integral_v<_elT>) {
+				if constexpr (std::is_signed_v<_elT>) {
+					this->elSz = sizeof(_elT);
+					this->dt = (_szType)dataTypes::_int;
+					this->data = new _packableObject<std::vector<_elT>>(from.begin(), from.end());
+				}
+				else {
+					this->elSz = sizeof(_elT);
+					this->dt = (_szType)dataTypes::_uint;
+					this->data = new _packableObject<std::vector<_elT>>(from.begin(), from.end());
+				}
+			}
+			else if constexpr (is_any_array_c<_elT>) {
+				this->elSz = 0;
+				this->dt = (_szType)dataTypes::_package;
+				this->data = new _packableObject<std::vector<_defParserObject>>(from.begin(), from.end());
+			}
+			else if constexpr (std::is_base_of_v<packable, _elT>) {
+				if constexpr (is_packed_size_static<_elT>) {
+					this->elSz = _elT::_packed_size;
+				}
+				else this->elSz = 0;
+				this->dt = dataTypes::_end;
+				this->data = new T(from);
+			}
+		}
+		constexpr void  set(packable* from) { delete data; data = from; }
+		constexpr void* get() { return data; }
+
+		template <typename T>
+		requires(!is_any_array_c<T>)
+		constexpr void exportData(T& to) {
+			if (this->ot == (ui8)objTypes::_elem) {
+				if constexpr (std::is_integral_v<T> || std::is_floating_point_v<T>) {
+					switch (this->dt) {
+					case (_szType)dataTypes::_int:
+						switch (this->elSz) {
+						case 1: to =  ((_packableObject<i8>*)this->data)->getObject(); break;
+						case 2: to = ((_packableObject<i16>*)this->data)->getObject(); break;
+						case 4: to = ((_packableObject<i32>*)this->data)->getObject(); break;
+						case 8: to = ((_packableObject<i64>*)this->data)->getObject(); break;
+						default: break; } break;
+					case (_szType)dataTypes::_uint:
+						switch (this->elSz) {
+						case 1: to =  ((_packableObject<ui8>*)this->data)->getObject(); break;
+						case 2: to = ((_packableObject<ui16>*)this->data)->getObject(); break;
+						case 4: to = ((_packableObject<ui32>*)this->data)->getObject(); break;
+						case 8: to = ((_packableObject<ui64>*)this->data)->getObject(); break;
+						default: break; } break;
+					case (_szType)dataTypes::_float:
+						switch (this->elSz) {
+						case sizeof(float): to  =  ((_packableObject<float>*)this->data)->getObject(); break;
+						case sizeof(double): to = ((_packableObject<double>*)this->data)->getObject(); break;
+						default: break; } break;
+					default: break; }
+				}
+				else if constexpr (std::convertible_to<_defParserObject, T>) {
+					to = *this;
 				}
 			}
 		}
 
-		template <typename type> void createBufferAs() {
-			buffer = new type;
+		template <typename vT>
+		requires(is_any_array_c<vT>)
+		constexpr void exportData(vT& to) {
+			using T = typename vT::value_type;
+			if (this->ot == (ui8)objTypes::_vec) {
+				if constexpr (std::is_integral_v<T> || std::is_floating_point_v<T>) {
+					switch (this->dt) {
+					case (_szType)dataTypes::_int:
+						switch (this->elSz) {
+						case 1: { auto& p = ((_packableObject<std::vector<i8>>*)this->data)->getObject(); to.assign(p.begin(), p.end());  } break;
+						case 2: { auto& p = ((_packableObject<std::vector<i16>>*)this->data)->getObject(); to.assign(p.begin(), p.end()); } break;
+						case 4: { auto& p = ((_packableObject<std::vector<i32>>*)this->data)->getObject(); to.assign(p.begin(), p.end()); } break;
+						case 8: { auto& p = ((_packableObject<std::vector<i64>>*)this->data)->getObject(); to.assign(p.begin(), p.end()); } break;
+						default: break; } break;
+					case (_szType)dataTypes::_uint:
+						switch (this->elSz) {
+						case 1: { auto& p = ((_packableObject<std::vector<ui8>>*)this->data)->getObject(); to.assign(p.begin(), p.end());  } break;
+						case 2: { auto& p = ((_packableObject<std::vector<ui16>>*)this->data)->getObject(); to.assign(p.begin(), p.end()); } break;
+						case 4: { auto& p = ((_packableObject<std::vector<ui32>>*)this->data)->getObject(); to.assign(p.begin(), p.end()); } break;
+						case 8: { auto& p = ((_packableObject<std::vector<ui64>>*)this->data)->getObject(); to.assign(p.begin(), p.end()); } break;
+						default: break; } break;
+					case (_szType)dataTypes::_float:
+						switch (this->elSz) {
+						case sizeof(float): { auto& p = ((_packableObject<std::vector<float>>*)this->data)->getObject(); to.assign(p.begin(), p.end());   } break;
+						case sizeof(double): { auto& p = ((_packableObject<std::vector<double>>*)this->data)->getObject(); to.assign(p.begin(), p.end()); } break;
+						default: break; } break;
+					default: break; }
+				}
+				else if constexpr (std::is_convertible_v<_defParserObject, T>) {
+					if (this->dt == (_szType)dataTypes::_package) {
+						auto& p = ((_packableObject<std::vector<_defParserObject>>*)this->data)->getObject();
+						to.assign(p.begin(), p.end());
+					}
+				}
+				else {
+					if (this->dt == (_szType)dataTypes::_package) {
+						auto& p = ((_packableObject<std::vector<_defParserObject>>*)this->data)->getObject();
+						if constexpr (is_size_dynamic<T>) { to.resize(p.size()); }
+						
+						size_t s = std::min((size_t)to.size(), p.size());
+						for (size_t i = 0; i < s; i++) {
+							p[i].exportData(to[i]);
+						}
+					}
+				}
+			}
 		}
 
-		void copyFrom(const float& num) {
-			_buffer(_delete);
-			createBufferAs<float>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_float;
-			*(float*)buffer = num;
-		}
-		void copyFrom(const long double& num) {
-			_buffer(_delete);
-			createBufferAs<long double>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_double;
-			*(long double*)buffer = num;
-		}
-		void copyFrom(const i64& num) {
-			_buffer(_delete);
-			createBufferAs<i64>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_int;
-			*(i64*)buffer = num;
-		}
-		void copyFrom(const ui64& num) {
-			_buffer(_delete);
-			createBufferAs<ui64>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_uint;
-			*(ui64*)buffer = num;
-		}
-		void copyFrom(const std::string& str) {
-			_buffer(_delete);
-			createBufferAs<std::string>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_string;
-			*(std::string*)buffer = str;
-		}
+		template <typename T>
+		_defParserObject(const T& from) { set<T>(from); }
 		
-		void copyFrom(const _defObjectInfo& obj) {
-			_buffer(_delete);
-			createBufferAs<_defObjectInfo>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_object;
-			*(_defObjectInfo*)buffer = obj;
+		_defParserObject() {}
+		void deleteData() {
+			delete (packable*)(this->data);
+			this->dt = (_szType)dataTypes::_null;
+			this->ot = (ui8)objTypes::_elem;
+			this->data = nullptr;
+			this->is_named = 0;
+			this->elSz = 0;
 		}
-		
-		void copyFrom(const std::vector<float>& num) {
-			_buffer(_delete);
-			createBufferAs<std::vector<float>>();
-			dataT = dataTypes::_vec;
-			objT = standardTypes::_float;
-			*(std::vector<float>*)buffer = num;
-		}
-		void copyFrom(const std::vector<double>& num) {
-			_buffer(_delete);
-			createBufferAs<std::vector<double>>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_double;
-			*(std::vector<double>*)buffer = num;
-		}
-		void copyFrom(const std::vector<i64>& num) {
-			_buffer(_delete);
-			createBufferAs<std::vector<i64>>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_int;
-			*(std::vector<i64>*)buffer = num;
-		}
-		void copyFrom(const std::vector<ui64>& num) {
-			_buffer(_delete);
-			createBufferAs<std::vector<ui64>>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_uint;
-			*(std::vector<ui64>*)buffer = num;
-		}
-		void copyFrom(const std::vector<std::string>& str) {
-			_buffer(_delete);
-			createBufferAs<std::vector<std::string>>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_string;
-			*(std::vector<std::string>*)buffer = str;
-		}
-		
-		void copyFrom(const std::vector<_defObjectInfo>& obj) {
-			_buffer(_delete);
-			createBufferAs<std::vector<_defObjectInfo>>();
-			dataT = dataTypes::_elem;
-			objT = standardTypes::_object;
-			*(std::vector<_defObjectInfo>*)buffer = obj;
-		}
-		
+		virtual packable* cpy() { return new _defParserObject(*this); }
+		virtual packable* cpyPtr() { return this->data->cpy(); }
 
-		size_t pack (bytesVec*   to, base_iterator* whr, void* data = nullptr) {
-			packableObject<std::string> _name(&name, _defStrFunctions);
-			packableObject<size_t> _objT(objT);
-			packableObject<ui8> _dataT(dataT);
-			base_iterator cpy = *whr;
-			_name.pack(to, whr, nullptr);
-			_dataT.pack(to, whr, nullptr);
-			_objT.pack(to, whr, nullptr);
-			_buffer(_bufferOperands::_pack, new _packableArgs(to, whr, nullptr));
-			return (size_t)(whr->_Ptr - cpy._Ptr);
-		}
+		void myFunc(size_t c, void* data) {}
+	};
 
-		size_t parse(bytesVec* from, base_iterator* whr, void* data = nullptr) {
-			packableObject<std::string> _name(&name, _defStrFunctions);
-			packableObject<size_t> _objT(&objT);
-			packableObject<ui8> _dataT(&dataT);
-			base_iterator cpy = *whr;
-			_name.parse(from, whr, nullptr);
-			_dataT.parse(from, whr, nullptr);
-			_objT.parse(from, whr, nullptr);
-			_buffer(_bufferOperands::_parse, new _packableArgs(from, whr, nullptr));
-			return (size_t)(whr->_Ptr - cpy._Ptr);
-		}
+	class Parser : public _defParserObject {
+	public:
+		Parser& operator [] (const std::string& name) {
+			if (!(this->ot == (ui8)objTypes::_vec && this->dt == (_szType)dataTypes::_package)) {
+				if (this->data != nullptr) delete this->data;
+				this->data = new _packableObject<std::vector<Parser>>();
+				this->ot = (ui8)objTypes::_vec;
+				this->dt = (_szType)dataTypes::_package;
+			}
+			auto* p = getAs<std::vector<Parser>>();
+			for (size_t i = 0; i < p->size(); i++) if ((*p)[i].name == name) return (*p)[i];
 
-		void operator = (const _defObjectInfo& from) {
-			copyFrom(from);
+			p->resize(p->size() + 1);
+			(*p)[p->size() - 1].setName(name);
+			return (*p)[p->size() - 1];
+
 		}
-		_defObjectInfo() {}
-		_defObjectInfo(const _defObjectInfo& from) {
-			copyFrom(from);
+		Parser& operator [] (size_t i) {
+			if (!(this->ot == (ui8)objTypes::_vec && this->dt == (_szType)dataTypes::_package)) {
+				if (this->data != nullptr) delete this->data;
+				this->data = new _packableObject<std::vector<Parser>>();
+				this->ot = (ui8)objTypes::_vec;
+				this->dt = (_szType)dataTypes::_package;
+			}
+			auto* p = getAs<std::vector<Parser>>();
+			if (p->size() <= i) p->resize(i + 1);
+			return (*p)[i];
 		}
+		std::vector<Parser>* getPackage(){ 
+			if (!(this->ot == (ui8)objTypes::_vec && this->dt == (_szType)dataTypes::_package) || data == nullptr) return nullptr;
+			else return (std::vector<Parser>*)data->get();
+		}
+		bool isPackage() { return (this->ot == (ui8)objTypes::_vec && this->dt == (_szType)dataTypes::_package); }
+		template <typename T>
+		_defParserObject& operator = (const T& from) { set<T>(from); return *this; }
 	};
 }

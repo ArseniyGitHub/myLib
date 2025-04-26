@@ -1,4 +1,8 @@
+#pragma once
+#include <functional>
+#include <stdexcept>
 #define GETBIT (n, b) (n >> (b - 1)) % 2
+#define CALL(func, ...) func(__VA_ARGS__)
 
 namespace LIB {
     template <typename rt, typename... args> using fn = rt(*)(args...);
@@ -23,5 +27,47 @@ namespace LIB {
     typedef           double    d;
     typedef    long   double   ld;
     typedef           float     f;
+
+    void* getMemory(size_t blockSize) { return ::operator new(blockSize); }
+    struct _dynamicMemoryObject {
+        std::function<void()> create;
+        std::function<void()> del;
+        void* block = nullptr;
+        void deleteObject() { 
+            if (del != nullptr) {
+                if (block != nullptr) del();
+            }
+            else ::operator delete(block);
+            block = nullptr; 
+        }
+
+        template <typename T>
+        void createObject() {
+            deleteObject();
+            create = [this]() { block = new T; };
+            del = [this]() { delete (T*)block; };
+            create();
+        }
+
+        template <typename T, typename argT = T>
+        void set(const argT& from) { 
+            if (block == nullptr) createObject<T>();
+            *(T*)block = from;
+        }
+
+        template <typename T>
+        void createObject(const T& from) {
+            deleteObject();
+            createObject<T>();
+            set<T, T>(from);
+        }
+        void createObjectLast() { if (create != nullptr) create(); }
+
+        template <typename T>
+        T& get() { 
+            if (block != nullptr) return *(T*)block;
+            else std::runtime_error("class _dynamicMemoryObject, cant give NULL object!");
+        }
+    };
 }
 using namespace LIB;

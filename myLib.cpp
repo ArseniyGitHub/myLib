@@ -14,7 +14,8 @@
 #include "source/txtWork.h"
 #include "source/event.h"
 #include "source/parserElem.hpp"
-//#include "source/mainParser.hpp"
+#include "source/allocator.hpp"
+#include "source/mainParser.hpp"
 
 namespace LIB {
 	

@@ -8,7 +8,8 @@
 namespace PARSER_V2 {
 
 	template <typename type, size_t sz> struct _Array : public std::array<type, sz> {
-		_Array(const type* begin, size_t read = sz) {
+		constexpr _Array(const type* begin, size_t read = sz) {
+			
 			for (size_t i = 0; i < read; i++) {
 				this->_Elems[i] = begin[i];
 			}
@@ -18,35 +19,18 @@ namespace PARSER_V2 {
 		}
 	};
 	template <typename type> struct _Vector : public std::vector<type> {
-		_Vector(size_t sz, const type* begin, size_t read = sz) {
+		constexpr _Vector(size_t sz, const type* begin, size_t read = sz) {
 			this->resize(sz);
+			type* d = this->data();
 			for (size_t i = 0; i < read; i++) {
 				(*this)[i] = begin[i];
 			}
 			for (size_t i = read; i < sz; i++) {
-				this->_Elems[i] = 0;
+				d[i] = 0;
 			}
 		}
 		_Vector() {}
 	};
-
-	/*
-	struct _PtrDataRecurce {
-		std::vector<void*> args;  size_t id = 0;
-		void* get() {
-			if(id < args.size()); 
-			else {
-				args.resize(id + 1);
-				args[id] = nullptr;
-			}
-			return args[id++];
-		}
-		void add(void* arg) { args.push_back(arg); }
-		void reset() { id = 0; }
-		_PtrDataRecurce() {}
-		_PtrDataRecurce(const std::vector<void*>& from, size_t i = 0) : args(from), id(i) {}
-	};
-	*/
 
 	template<typename T>
 	concept is_vec_c = requires {
@@ -66,8 +50,11 @@ namespace PARSER_V2 {
 	template <typename T>
 	concept is_size_dynamic = requires(T container, typename T::size_type s) {
 		{ container.resize(s) } -> std::convertible_to<void>;
-		requires is_any_array_c<T>;
+		requires ((is_any_array_c<T> || requires{ typename T::_dynamic_size; }) && !requires{ typename T::_not_dynamic_size; });
 	};
+
+	template <typename T>
+	concept is_packed_size_static = requires { std::is_same_v<decltype(T::_packed_size), const size_t>; };
 	template <typename T>
 	requires (is_any_array_c<T>)
 	using element_type = typename T::value_type;
@@ -77,225 +64,84 @@ namespace PARSER_V2 {
 	template <size_t sz> using bytesArr = _Array<byte_type, sz>;
 	using base_iterator = std::vector<byte_type>::iterator;
 
-	/*
-	template <typename type> using base_objPackT  = fn<void, bytesVec*, base_iterator*, type*, size_t, _PtrDataRecurce*>;
-	template <typename type> using base_objParseT = fn<void, bytesVec*, base_iterator*, type*, size_t, _PtrDataRecurce*>;
-	__interface packable{
-    public:
-		virtual size_t pack(bytesVec*, base_iterator*, size_t) =  0;
-		virtual size_t parse(bytesVec*, base_iterator*, size_t) = 0;
+	template <typename T, size_t s, typename arr = std::array<T, s>>
+	class arrayWithDynamicSize : public arr { 
+	public: 
+		using _dynamic_size = void; 
+		void resize(size_t s) {}
 	};
-	*/
 
-	__interface packable {
-		virtual size_t pack(bytesVec*, size_t, void*)  = 0;
-		virtual size_t parse(bytesVec*, size_t, void*) = 0;
+	template <typename T, typename vec = std::vector<T>>
+	class vectorWithStaticSize : public vec { 
+	public: 
+		vectorWithStaticSize(size_t s) { this->resize(s); }
+		vectorWithStaticSize() = default;
+		using _not_dynamic_size = void;
 	};
-	/*
-	struct __ParserErr_NotFullPacket {};
-	*/
+
+	struct _Packet : public bytesVec { using _PacketType = void; };
+
+	struct packable {
+		virtual constexpr size_t pack(bytesVec*, size_t, void*, size_t)    = 0;
+		virtual constexpr size_t parse(bytesVec*, size_t, void*, size_t)   = 0;
+		virtual constexpr void  set(packable* from)  = 0;
+		virtual constexpr void* get()                = 0;
+		virtual constexpr void myFunc(size_t, void*) = 0;
+		virtual ~packable()                          = default;
+		virtual packable* cpy()                      = 0;
+	};
 	using _szType = ui32;
 
-	
-	/*
-	template <typename type>
-	struct packableObject : public packable {
-	private:
-		type* object = nullptr;  bool connect = false;
+	struct _PackableObject_ErrSizeArg {};
 
-	public:
-		type& getObj() { return *object; }
-		type*& getObjPointer() { return object; }
-		void setPtrAs(bool status) { connect = status; }
-
-		class objectFunctions {
-		public:
-			base_objPackT<type>   _objPack;
-			base_objParseT<type> _objParse;
-			_PtrDataRecurce* data;
-			size_t mySize = 0;
-			objectFunctions() {}
-			objectFunctions(base_objPackT<type> _pack, base_objParseT<type> _parse, _PtrDataRecurce* _data = new _PtrDataRecurce, size_t myS = 0) : _objPack(_pack), _objParse(_parse), mySize(myS), data(_data) {}
-			objectFunctions(const objectFunctions& from) : _objPack(from._objPack), _objParse(from._objParse), mySize(from.mySize), data(new _PtrDataRecurce(*from.data)) {}
-		};
-
-		static void _defBytePack(bytesVec* to, base_iterator* whr, type* obj, size_t write = 0, _PtrDataRecurce* data = nullptr) {
-			data->get();
-			if (write == 0) write = sizeof(type);
-			bytesArr<sizeof(type)>* buffer = (bytesArr<sizeof(type)>*)(void*)obj;
-			size_t id = whr->_Ptr - to->begin()._Ptr;
-			if(write <= sizeof(type))
-				to->insert(*whr, buffer->begin(), buffer->begin() + write);
-			else {
-				to->insert(*whr, buffer->begin(), buffer->end());
-				*whr = to->begin() + id + buffer->size();
-				to->insert(*whr + sizeof(type), write - sizeof(type), 0);
-			}
-			*whr = to->begin() + id + write;
-		}
-		static void _defByteParse(bytesVec* from, base_iterator* whr, type* obj, size_t read = 0, _PtrDataRecurce* data = nullptr) {
-			data->get();
-			if (read == 0) read = sizeof(type);
-			*obj = *(type*)(void*)new bytesArr<sizeof(type)>(whr->_Ptr, read);
-			whr->_Ptr += sizeof(type);
-		}
-
-		inline static const objectFunctions _defByteFunctions = objectFunctions(_defBytePack, _defByteParse, new _PtrDataRecurce(std::vector<void*>({nullptr})), sizeof(type));
-
-		objectFunctions OF;
-
-		size_t pack(bytesVec* to, base_iterator* whr, size_t write = 0) {
-			size_t id = whr->_Ptr - to->begin()._Ptr;
-			OF._objPack(to, whr, object, write, OF.data);
-			return *whr - (to->begin() + id);
-		}
-		size_t parse(bytesVec* from, base_iterator* whr, size_t read = 0) {
-			base_iterator b = *whr;
-			OF._objParse(from, whr, object, read, OF.data);
-			return *whr - b;
-		}
-
-		packableObject(type* connect = new type, const objectFunctions& _OF = _defByteFunctions) : object(connect), OF(_OF), connect(true) {}
-		packableObject(const type& from, const objectFunctions& _OF = _defByteFunctions) : object(new type(from)), OF(_OF) {}
-		~packableObject() {
-			if (!connect)
-				delete object;
-		}
-
-		void setOF(packableObject<type>::objectFunctions from) {
-			OF = from;
-		}
-		packableObject<type>::objectFunctions getOF() {
-			return OF;
-		}
-	};
-
-	
-	
-	template <class arrayType, typename szType = _szType>
-	requires (is_any_array_c<arrayType>)
-	struct packableVector : public packableObject<arrayType> {
-		using type = element_type<arrayType>;
-	public:
-		packableObject<type>::objectFunctions objOF = packableObject<type>::_defByteFunctions;
-		
-
-		static void _defVecPack(bytesVec* to, base_iterator* whr, arrayType* obj, size_t write = 0, _PtrDataRecurce* data = nullptr) {
-			if (write < sizeof(szType) && write != 0) return;
-			size_t& mySize = write;
-			typename packableObject<type>::objectFunctions* buffer = (typename packableObject<type>::objectFunctions*)data->get();
-			packableObject<szType> size;  size.getObj() = obj->size();
-			packableObject<szType>   sz(mySize);
-			packableObject<bool> staticS(mySize != 0);
-			size.pack(to, whr);
-			staticS.pack(to, whr);
-			if (mySize != 0) {
-				sz.pack(to, whr);
-				for (type& e : *obj)
-					buffer->_objPack(to, whr, &e, 0, nullptr);
-			}
-			else {
-				base_iterator cpy;
-				byte_type* id;
-				for (type& e : *obj) {
-					cpy = *whr;  id = to->begin()._Ptr;
-					buffer->_objPack(to, whr, &e, 0, data);
-					*whr = to->begin() + (size_t)(whr->_Ptr - id);
-					sz.getObj() = whr->_Ptr - cpy._Ptr;
-					sz.pack(to, whr);
-				}
-			}
-		}
-		static void _defVecParse(bytesVec* from, base_iterator* whr, arrayType* obj, size_t read = 0, _PtrDataRecurce* data = nullptr) {
-			if (read < sizeof(szType) && read != 0) return;
-			size_t& mySize = read;
-			obj->clear();
-			typename packableObject<type>::objectFunctions* buffer = (typename packableObject<type>::objectFunctions*)data->get();
-			packableObject<szType> size;
-			packableObject<szType>   sz;
-			packableObject<bool> staticS;
-			size.parse(from, whr);
-			staticS.parse(from, whr);
-			obj->resize(size.getObj());
-			if (staticS.getObj()) {
-				sz.parse(from, whr);
-				for(type& e : *obj)
-					buffer->_objParse(from, whr, &e, sz.getObj(), data);
-			}
-			else {
-				for (type& e : *obj) {
-					sz.parse(from, whr);
-					buffer->_objParse(from, whr, &e, sz.getObj(), data);
-				}
-			}
-		}
-		inline static const packableObject<arrayType>::objectFunctions _defVecOF = typename packableObject<arrayType>::objectFunctions(_defVecPack, _defVecParse, new _PtrDataRecurce(), 0);
-
-		packableVector(arrayType* connect = new arrayType, const packableObject<type>::objectFunctions& _OF = packableObject<type>::_defByteFunctions) {
-			this->getObjPointer() = connect;
-			this->OF = _defVecOF;
-			this->OF.data->add(&objOF);
-			this->objOF.mySize = sizeof(type);
-			setOF(_OF);
-		}
-		packableVector(const arrayType& from, const packableObject<type>::objectFunctions& _OF = packableObject<type>::_defByteFunctions) {
-			this->getObjPointer() = new arrayType(from);
-			this->OF = _defVecOF;
-			this->OF.data->add(&objOF);
-			this->objOF.mySize = sizeof(type);
-			setOF(_OF);
-		}
-
-		void setOF(packableObject<type>::objectFunctions from) {
-			this->objOF = from;
-			//this->getDefPackArg() = this->objOF._objPack;
-			//this->getDefParseArg() = this->objOF._objParse;
-		}
-		packableObject<type>::objectFunctions getOF() {
-			return objOF;
-		}
-	};
-
-	struct _packableArgs { bytesVec* to; base_iterator* whr; void* data = nullptr; _packableArgs(bytesVec* _to, base_iterator* _whr, void* _data = nullptr) : to(_to), whr(_whr), data(_data) {} 
-	_packableArgs() {} };
-	template <typename type> struct _packableArgsP : public _packableArgs { type::objectFunctions _defOF; };
-
-	template <typename T, typename szT = size_t>
-	using packableObjectV_auto = std::conditional_t<is_any_array_c<T>, packableVector<T>, packableObject<T>>;
-	*/
 	template <typename type>
 	class _packableObject : public packable {
 	private:
 		type* object = nullptr;
 	public:
 		struct _fnArgs;
-		using packFn  = size_t(*)(bytesVec*, size_t, type*, void*);
-		using parseFn = size_t(*)(bytesVec*, size_t, type*, void*);
+		using packFn  = size_t(*)(bytesVec*, size_t, type*, void*, size_t);
+		using parseFn = size_t(*)(bytesVec*, size_t, type*, void*, size_t);
 		struct  typeOF;
 
-		type& getObject() { return *object; }
-		type*& getObjectPointer() { return object; }
+		virtual constexpr void* get()            { return (void*)object; }
+		virtual constexpr void set(packable* from) { *object = *(type*)from; }
+		constexpr type& getObject()            { return *object; }
+		constexpr type*& getObjectPointer()     { return object; }
 
 
 		//    byte copy OF
-		static constexpr size_t _defByteCopyPack (bytesVec* whr, size_t id, type* obj, void* args) {
+		static constexpr size_t _defByteCopyPack (bytesVec* whr, size_t id, type* obj, void* args, size_t szLimit = 0) {
 			if (whr == nullptr || obj == nullptr) return 0;
 			auto iter = whr->begin() + id;
-			byte_type* obj_ptr = std::bit_cast<byte_type*>(obj);
-			whr->insert(iter, obj_ptr, obj_ptr + sizeof(type));
-			return sizeof(type);
+			byte_type* obj_ptr = (byte_type*)(void*)obj;
+			if (szLimit == 0) {
+				whr->insert(iter, obj_ptr, obj_ptr + sizeof(type));
+				return sizeof(type);
+			}
+			else {
+				bytesVec buffer(szLimit, obj_ptr, sizeof(type));
+				whr->insert(iter, buffer.begin(), buffer.end());
+				return szLimit;
+			}
 		}
-		static constexpr size_t _defByteCopyParse(bytesVec* whr, size_t id, type* obj, void* args) {
-			if (whr == nullptr || whr->size() < id + sizeof(type)) return 0;;
+		static constexpr size_t _defByteCopyParse(bytesVec* whr, size_t id, type* obj, void* args, size_t szLimit = 0) {
+			if (whr == nullptr || obj == nullptr) return 0;;
 			const byte_type* from = &(*whr)[id];
-			*obj = *std::bit_cast<const type*>(from);
-			return sizeof(type);
+			if (szLimit == 0) {
+				*obj = *std::bit_cast<const type*>(from);
+				return sizeof(type);
+			}
+			else {
+				bytesArr<sizeof(type)>* ptr = (new bytesArr<sizeof(type)>(from, szLimit));
+				*obj = *(type*)(void*)(ptr->_Elems);
+				return szLimit;
+			}
 		}
-
 
 		//    array/vector/etc OF
 		
-		static constexpr size_t _defVecPack (bytesVec* whr, size_t id, type* obj, void* _args) {
+		static constexpr size_t _defVecPack (bytesVec* whr, size_t id, type* obj, void* _args, size_t szLimit = 0) {
 			if constexpr (is_any_array_c<type>) {
 				using arrElT = typename type::value_type;
 				size_t beginID = id;
@@ -308,7 +154,7 @@ namespace PARSER_V2 {
 				}
 				else if (args.useWhen == -1) {
 					if constexpr (!is_any_array_c<arrElT>) {
-						if (args.OF.packObj == nullptr) p = &_packableObject<typename type::value_type>::_defByteCopyPack;
+						if (args.OF.packObj == nullptr) p = &_packableObject<arrElT>::_defByteCopyPack;
 						else p = args.OF.packObj;
 						givePtr = args.data;
 					}
@@ -322,35 +168,51 @@ namespace PARSER_V2 {
 					p = _packableObject<arrElT>::typeOF::getOF().packObj;
 					givePtr = _args;
 				}
-				_packableObject<_szType> eSize;
+				_packableObject<_szType> eSize((_szType)0);
+				if constexpr (is_packed_size_static<arrElT>) {
+					eSize.getObject() = arrElT::_packed_size;
+					id += eSize.pack(whr, id);
+				}
+				else if (p == &_packableObject<arrElT>::_defByteCopyPack) {
+					eSize.getObject() = sizeof(arrElT);
+					id += eSize.pack(whr, id);
+				}
+				if (szLimit != 0) eSize.getObject() = szLimit;
 				if constexpr (is_size_dynamic<type>) {
 					_packableObject<_szType> sz(obj->size());
 					id += sz.pack(whr, id);
 				}
+				/*
+				if (szLimit == 0);
+				else if (szLimit < (id - beginID)) throw _PackableObject_ErrSizeArg();
+				else if ((szLimit - (id - beginID)) < (eSize.getObject() * obj->size())) throw _PackableObject_ErrSizeArg();
+				*/
 				for (arrElT& e : *obj) {
-					eSize.getObject() = p(whr, id, &e, givePtr);
-					if (p == &_packableObject<arrElT>::_defByteCopyPack || p == &_packableObject<arrElT>::_defVecPack) id += eSize.getObject();
-					else id += eSize.pack(whr, id) + eSize.getObject();
+					if (!is_packed_size_static<arrElT> && p != &_packableObject<arrElT>::_defByteCopyPack) { eSize.getObject() = p(whr, id, &e, givePtr, szLimit); id += eSize.pack(whr, id) + eSize.getObject(); }
+					else id += p(whr, id, &e, givePtr, szLimit);
 				}
+				//if (szLimit < (id - beginID) && szLimit != 0) throw _PackableObject_ErrSizeArg();
 				return id - beginID;
 			}
 			else return 0;
 		}
+
+		//  packetOF
 		
-		static constexpr size_t _defVecParse(bytesVec* whr, size_t id, type* obj, void* _args) {
+		static constexpr size_t _defVecParse(bytesVec* whr, size_t id, type* obj, void* _args, size_t szLimit = 0) {
 			if constexpr (is_any_array_c<type>) {
 				using arrElT = typename type::value_type;
 				size_t beginID = id;
-				typename _packableObject<typename type::value_type>::_fnArgs& args = *(typename _packableObject<typename type::value_type>::_fnArgs*)_args;
+				typename _packableObject<arrElT>::_fnArgs& args = *(typename _packableObject<arrElT>::_fnArgs*)_args;
 				void* givePtr;
-				typename _packableObject<typename type::value_type>::parseFn p;
+				typename _packableObject<arrElT>::parseFn p;
 				if (args.useWhen == 0) {
 					p = args.OF.parseObj;
 					givePtr = args.data;
 				}
 				else if (args.useWhen == -1) {
 					if constexpr (!is_any_array_c<arrElT>) {
-						if (args.OF.parseObj == nullptr) p = &_packableObject<typename type::value_type>::_defByteCopyParse;
+						if (args.OF.parseObj == nullptr) p = &_packableObject<arrElT>::_defByteCopyParse;
 						else p = args.OF.parseObj;
 						givePtr = args.data;
 					}
@@ -361,37 +223,109 @@ namespace PARSER_V2 {
 				}
 				else {
 					args.useWhen--;
-					p = _packableObject<typename type::value_type>::typeOF::getOF().parseObj;
+					p = _packableObject<arrElT>::typeOF::getOF().parseObj;
 					givePtr = _args;
 				}
-				_packableObject<_szType> eSize;
+				_packableObject<_szType> eSize((_szType)0);
+				if constexpr (is_packed_size_static<arrElT>) {
+					id += eSize.parse(whr, id);
+				}
+				else if (p == &_packableObject<arrElT>::_defByteCopyParse) {
+					id += eSize.parse(whr, id);
+				}
+
+				if (szLimit != 0) eSize.getObject() = szLimit;
+				
 				if constexpr (is_size_dynamic<type>) {
 					_packableObject<_szType> sz;
 					id += sz.parse(whr, id);
 					obj->resize(sz.getObject());
 				}
+				/*
+				if (szLimit == 0);
+				else if (szLimit < (id - beginID)) throw _PackableObject_ErrSizeArg();
+				else if ((szLimit - (id - beginID)) < (eSize.getObject() * obj->size())) throw _PackableObject_ErrSizeArg();
+				*/
 				for (typename type::value_type& e : *obj) {
-					eSize.getObject() = p(whr, id, &e, givePtr);
-					if (p == &_packableObject<typename type::value_type>::_defByteCopyParse || p == &_packableObject<typename type::value_type>::_defVecParse) id += eSize.getObject();
-					else id += eSize.pack(whr, id) + eSize.getObject();
+					if (!is_packed_size_static<typename type::value_type> && p != &_packableObject<typename type::value_type>::_defByteCopyParse) { id += eSize.parse(whr, id); }
+					id += p(whr, id, &e, givePtr, eSize.getObject());
 				}
+				//if (szLimit < (id - beginID) && szLimit != 0) throw _PackableObject_ErrSizeArg();
 				return id - beginID;
 			}
 			else return 0;
 		}
 
+		static constexpr size_t _defPacketPack(bytesVec* v, size_t whr, type* obj, void* _args, size_t szLimit = 0) {
+			if constexpr (std::is_same_v<type, _Packet>) {
+				size_t beginID = whr;
+				size_t fullSize = obj->size();
+				if (szLimit == 0) szLimit = fullSize;
+				_fnArgs* arg = (_fnArgs*)_args;
+				bool sz = false;
+				if (arg != nullptr) if (arg->data != nullptr) sz = *(bool*)arg->data;
+				if (sz) {
+					_packableObject<_szType> s(szLimit);
+					whr += s.pack(v, whr);
+				}
+				if (szLimit > fullSize) {
+					v->insert(v->begin() + whr, obj->begin(), obj->begin() + fullSize);
+					for (size_t i = 0; i < szLimit - fullSize; i++) 
+						v->insert(v->begin() + whr + fullSize, (byte_type)0);
+				}
+				else v->insert(v->begin() + whr, obj->begin(), obj->begin() + szLimit);
+				whr += szLimit;
+				return whr - beginID;
+			}
+			else return 0;
+		}
+
+		static constexpr size_t _defPacketParse(bytesVec* v, size_t whr, type* obj, void* _args, size_t szLimit = 0) {
+			if constexpr (std::is_same_v<type, _Packet>) {
+				size_t beginID = whr;
+				size_t fullSize = szLimit;
+				_fnArgs* arg = (_fnArgs*)_args;
+				bool sz = false;
+				if (arg != nullptr) if (arg->data != nullptr) sz = *(bool*)arg->data;
+				if (sz) {
+					_packableObject<_szType> s;
+					whr += s.parse(v, whr);
+					if (szLimit == 0) { szLimit = s.getObject(); fullSize = szLimit; }
+					else fullSize = s.getObject();
+				}
+				obj->assign(v->begin() + whr, v->begin() + whr + szLimit);
+				whr += fullSize;
+				return whr - beginID;
+			}
+			else return 0;
+		}
+
 		struct _fnArgs {
-			size_t useWhen = 0;
+			i32 useWhen = -1;
 			typeOF OF;
 			void* data = nullptr;
-			constexpr _fnArgs(_szType i = -1, typeOF _OF = typeOF(), void* _data = nullptr) : useWhen(i), data(_data) {
+			constexpr _fnArgs(void* _data = nullptr, i32 i = -1, typeOF _OF = typeOF()) : useWhen(i), data(_data) {
 				OF = _OF;
 			}
 		};
 
+		enum class myFuncCommands {
+			_setOF,
+			_end
+		};
+
+		virtual void myFunc(size_t c, void* data) {
+			switch (c) {
+			case (size_t)myFuncCommands::_setOF:
+				OF = *(typeOF*)data;
+				break;
+			}
+		}
+
 
 		inline static typeOF constexpr _defByteCopyOF{ &_defByteCopyPack, &_defByteCopyParse };
 		inline static typeOF constexpr _defVecOF{ &_defVecPack, &_defVecParse };
+		inline static typeOF constexpr _defPacketOF{ &_defPacketPack, &_defPacketParse };
 		
 		
 		struct typeOF {
@@ -402,7 +336,9 @@ namespace PARSER_V2 {
 			constexpr typeOF& operator=(const typeOF&) = default;
 			
 			static constexpr const typeOF& getOF() {
-				if constexpr (is_any_array_c<type>)
+				if constexpr (std::is_same_v<type, _Packet>)
+					return _defPacketOF;
+				else if constexpr (is_any_array_c<type>)
 					return _defVecOF;
 				else return _defByteCopyOF;
 			}
@@ -413,18 +349,24 @@ namespace PARSER_V2 {
 		bool connect = false;
 
 		constexpr _packableObject(type* connect, typeOF _OF = typeOF::getOF()) : object(connect), OF(_OF), connect(true) {}
+		template <typename T>
+		constexpr _packableObject(const T& from, typeOF _OF = typeOF::getOF()) : object(new type(from)), OF(_OF) {}
 		constexpr _packableObject(const type& from, typeOF _OF = typeOF::getOF()) : object(new type(from)), OF(_OF) {}
 		constexpr _packableObject(typeOF _OF = typeOF::getOF()) : object(new type), OF(_OF) {}
-		~_packableObject() {
+		template <typename T, typename... args>
+		constexpr _packableObject(T arg1, args... _any_args) : object(new type(arg1, _any_args...)), OF(typeOF::getOF()) {}
+		constexpr _packableObject(bytesVec* to, size_t id, void* args = new _fnArgs()) { parse(to, id, args); }
+		virtual ~_packableObject() {
 			if (!connect)
 				delete object;
 		}
+		virtual packable* cpy() { return new _packableObject<type>(*this->object, this->OF); }
 
-		constexpr size_t pack(bytesVec* to, size_t whr, void* d = new _fnArgs()) {
-			return  OF.packObj(to, whr, object,   d);
+		virtual constexpr size_t pack(bytesVec* to, size_t whr, void* d = new _fnArgs(), size_t szLimit = 0) {
+			return  OF.packObj(to, whr, object,   d, szLimit);
 		}
-		constexpr size_t parse(bytesVec* from, size_t whr, void* d = new _fnArgs()) {
-			return OF.parseObj(from, whr, object, d);
+		virtual constexpr size_t parse(bytesVec* from, size_t whr, void* d = new _fnArgs(), size_t szLimit = 0) {
+			return OF.parseObj(from, whr, object, d, szLimit);
 		}
 	};
 }
